@@ -56,6 +56,13 @@ program
   });
 
 program
+  .command('create-account')
+  .description('Create additional account (HD derivation)')
+  .action(async () => {
+    await walletCommands.createAccount();
+  });
+
+program
   .command('delete')
   .description('Delete wallet (dangerous!)')
   .action(async () => {

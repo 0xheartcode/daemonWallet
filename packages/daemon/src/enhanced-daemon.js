@@ -246,15 +246,268 @@ export class EnhancedDaemonService {
   }
 
   async handleNativeMessage(message) {
-    // This would contain the existing native message handlers
-    // For now, just log that we received it
-    console.log(chalk.blue('📨 Native message:'), message.method);
+    const { id, method, params = [] } = message;
+    console.log(chalk.blue('📨 Native message:'), method, chalk.gray(`(id: ${id})`));
+
+    try {
+      switch (method) {
+        case 'wallet_status':
+          return await this.handleWalletStatus(id);
+
+        case 'wallet_unlock':
+          return await this.handleWalletUnlock(id);
+
+        case 'eth_accounts':
+          return await this.handleEthAccounts(id);
+
+        case 'eth_requestAccounts':
+          return await this.handleEthRequestAccounts(id, params);
+
+        case 'eth_sendTransaction':
+          return await this.handleEthSendTransaction(id, params);
+
+        case 'eth_sign':
+          return await this.handleEthSign(id, params);
+
+        case 'personal_sign':
+          return await this.handlePersonalSign(id, params);
+
+        default:
+          throw new Error(`Unsupported method: ${method}`);
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Native message handler error:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
+  }
+
+  async handleWalletStatus(id) {
+    const daemonStatus = this.getStatus();
+    const keystoreCount = await this.keystore.countKeystoreFiles();
     
-    // TODO: Implement native message handlers with validation
-    this.nativeMessaging.sendResponse(message.id, { 
-      success: true, 
-      message: 'Enhanced daemon received message' 
-    });
+    const status = {
+      locked: daemonStatus.locked,
+      accounts: daemonStatus.locked ? [] : this.keystore.getAccounts(),
+      activeSessions: daemonStatus.activeSessions,
+      hasKeystore: daemonStatus.hasKeystore,
+      keystoreCount,
+      state: daemonStatus.state
+    };
+
+    console.log(chalk.green('📊 Wallet status:'), 
+      chalk.gray(`locked: ${status.locked}, accounts: ${status.accounts.length}`));
+    
+    this.nativeMessaging.sendResponse(id, status);
+  }
+
+  async handleWalletUnlock(id) {
+    try {
+      if (!this.keystore.hasKeystore()) {
+        throw new Error('No wallet found. Create one with the CLI first.');
+      }
+
+      if (!this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        // Already unlocked
+        const accounts = this.keystore.getAccounts();
+        console.log(chalk.yellow('🔓 Wallet already unlocked'));
+        return this.nativeMessaging.sendResponse(id, {
+          success: true,
+          accounts
+        });
+      }
+
+      console.log(chalk.blue('🔓 Extension requesting wallet unlock...'));
+      const password = await this.approvalUI.promptUnlock();
+      
+      const success = await this.keystore.unlock(password);
+
+      if (success) {
+        const accounts = this.keystore.getAccounts();
+        this.sessionManager.unlock(accounts);
+        
+        console.log(chalk.green('✅ Wallet unlocked via extension'));
+        this.nativeMessaging.sendResponse(id, {
+          success: true,
+          accounts
+        });
+      } else {
+        console.log(chalk.red('❌ Invalid password'));
+        this.nativeMessaging.sendResponse(id, {
+          success: false,
+          error: 'Invalid password'
+        });
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Unlock failed:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
+  }
+
+  async handleEthAccounts(id) {
+    try {
+      if (this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        console.log(chalk.yellow('🔒 eth_accounts: Wallet locked'));
+        return this.nativeMessaging.sendResponse(id, []);
+      }
+
+      const accounts = this.keystore.getAccounts();
+      console.log(chalk.green('👥 eth_accounts:'), `${accounts.length} accounts`);
+      this.nativeMessaging.sendResponse(id, accounts);
+      
+    } catch (error) {
+      console.error(chalk.red('❌ eth_accounts error:'), error.message);
+      this.nativeMessaging.sendResponse(id, []);
+    }
+  }
+
+  async handleEthRequestAccounts(id, params) {
+    try {
+      // Check if wallet is unlocked
+      if (this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        throw new Error('Wallet is locked. Unlock first.');
+      }
+
+      // Get origin from params if available
+      const origin = params[0]?.origin || 'Unknown DApp';
+      
+      console.log(chalk.blue('🌐 Account access request from:'), chalk.bold(origin));
+      
+      // Ask user for permission
+      const approved = await this.approvalUI.promptAccountAccess(origin);
+      
+      if (approved) {
+        const accounts = this.keystore.getAccounts();
+        console.log(chalk.green('✅ Account access approved'));
+        this.nativeMessaging.sendResponse(id, accounts);
+      } else {
+        console.log(chalk.red('❌ Account access denied'));
+        this.nativeMessaging.sendError(id, 4001, 'User rejected the request');
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ eth_requestAccounts error:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
+  }
+
+  async handleEthSendTransaction(id, params) {
+    try {
+      if (this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        throw new Error('Wallet is locked. Unlock first.');
+      }
+      
+      const txRequest = params[0];
+      if (!txRequest) {
+        throw new Error('Transaction parameters required');
+      }
+
+      console.log(chalk.blue('💸 Transaction request:'));
+      console.log(chalk.gray(`  From: ${txRequest.from}`));
+      console.log(chalk.gray(`  To: ${txRequest.to}`));
+      console.log(chalk.gray(`  Value: ${txRequest.value || '0x0'}`));
+
+      // Show approval UI
+      const approved = await this.approvalUI.promptTransactionApproval(txRequest);
+      
+      if (!approved) {
+        console.log(chalk.red('❌ Transaction rejected'));
+        this.approvalUI.showTransactionResult(false);
+        return this.nativeMessaging.sendError(id, 4001, 'User rejected the request');
+      }
+
+      // Sign and send transaction
+      try {
+        const signedTx = await this.keystore.signTransaction(txRequest, txRequest.from);
+        const txResponse = await this.provider.broadcastTransaction(signedTx);
+        
+        console.log(chalk.green('✅ Transaction sent:'), txResponse.hash);
+        this.approvalUI.showTransactionResult(true, txResponse.hash);
+        this.nativeMessaging.sendResponse(id, txResponse.hash);
+        
+      } catch (error) {
+        console.error(chalk.red('❌ Transaction failed:'), error.message);
+        this.approvalUI.showTransactionResult(false, null, error.message);
+        throw error;
+      }
+
+    } catch (error) {
+      console.error(chalk.red('❌ eth_sendTransaction error:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
+  }
+
+  async handleEthSign(id, params) {
+    try {
+      if (this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        throw new Error('Wallet is locked. Unlock first.');
+      }
+      
+      const [address, message] = params;
+      if (!address || !message) {
+        throw new Error('Address and message required');
+      }
+
+      console.log(chalk.blue('✍️  Message signing request:'));
+      console.log(chalk.gray(`  Address: ${address}`));
+      console.log(chalk.gray(`  Message: ${message}`));
+
+      // Show approval UI
+      const approved = await this.approvalUI.promptMessageSignature({
+        address,
+        message
+      });
+      
+      if (!approved) {
+        console.log(chalk.red('❌ Message signing rejected'));
+        return this.nativeMessaging.sendError(id, 4001, 'User rejected the request');
+      }
+
+      // Sign message
+      const signature = await this.keystore.signMessage(message, address);
+      console.log(chalk.green('✅ Message signed'));
+      this.nativeMessaging.sendResponse(id, signature);
+
+    } catch (error) {
+      console.error(chalk.red('❌ eth_sign error:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
+  }
+
+  async handlePersonalSign(id, params) {
+    try {
+      if (this.stateManager.isState(DAEMON_STATES.LOCKED)) {
+        throw new Error('Wallet is locked. Unlock first.');
+      }
+      
+      const [message, address] = params;
+      if (!address || !message) {
+        throw new Error('Address and message required');
+      }
+
+      console.log(chalk.blue('✍️  Personal message signing request:'));
+      console.log(chalk.gray(`  Address: ${address}`));
+      console.log(chalk.gray(`  Message: ${message}`));
+
+      // Show approval UI
+      const approved = await this.approvalUI.promptMessageSignature({
+        address,
+        message,
+        type: 'personal_sign'
+      });
+      
+      if (!approved) {
+        console.log(chalk.red('❌ Personal message signing rejected'));
+        return this.nativeMessaging.sendError(id, 4001, 'User rejected the request');
+      }
+
+      // Sign message
+      const signature = await this.keystore.signMessage(message, address);
+      console.log(chalk.green('✅ Personal message signed'));
+      this.nativeMessaging.sendResponse(id, signature);
+
+    } catch (error) {
+      console.error(chalk.red('❌ personal_sign error:'), error.message);
+      this.nativeMessaging.sendError(id, -1, error.message);
+    }
   }
 
   _updateStateFromKeystore() {

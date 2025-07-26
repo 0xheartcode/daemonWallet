@@ -23,11 +23,17 @@ Browser DApp -> Chrome Extension -> Native Messaging -> Daemon Service -> Keysto
 # Install all dependencies
 $ make install
 
-# Create a new wallet
+# Create a new wallet (enforces one wallet maximum)
 $ make create-wallet
 
-# Start the daemon
+# Start the daemon (with auto-reload keystore)
 $ make start-daemon
+
+# Create additional accounts (HD derivation)
+$ make create-account
+
+# Export all wallet data (dangerous!)
+$ make export-wallet
 ```
 
 ## Quick Start
@@ -82,8 +88,10 @@ $ make help
 1. **Private keys never leave the CLI** - The browser extension cannot access keys
 2. **Terminal-based approval** - All transactions require explicit approval
 3. **Encrypted storage** - Keys are encrypted with scrypt + AES-256-GCM
-4. **Auto-lock** - Wallet locks after 15 minutes of inactivity
-5. **Session management** - Tracks active connections and enforces timeouts
+4. **Manual lock only** - No auto-lock timeout (unlock persists until manual lock or restart)
+5. **State machine validation** - All requests validated through security pipeline
+6. **Circuit breakers** - Automatic error recovery and protection
+7. **Account visibility control** - Hide/show accounts without deleting them
 
 ## Configuration
 

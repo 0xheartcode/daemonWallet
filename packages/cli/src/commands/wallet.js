@@ -273,6 +273,93 @@ export class WalletCommands {
     }
   }
 
+  async createAccount() {
+    console.log(chalk.blue('➕ Creating additional account...'));
+    console.log();
+
+    try {
+      // Check if daemon is running and get status through daemon
+      try {
+        const { IPCClient } = await import('@daemon-wallet/core');
+        const ipcClient = new IPCClient(this.config.getDaemonSocket());
+        
+        // Add error handler to prevent unhandled errors
+        ipcClient.on('error', () => {
+          // Silently handle to prevent unhandled error events
+        });
+        
+        await ipcClient.connect();
+        const status = await ipcClient.requestStatus();
+        
+        if (status.locked) {
+          console.log(chalk.red('❌ Wallet is locked'));
+          console.log(chalk.yellow('💡 Unlock first: make unlock-wallet'));
+          ipcClient.disconnect();
+          return;
+        }
+        
+        if (!status.hasKeystore) {
+          console.log(chalk.red('❌ No wallet found'));
+          console.log(chalk.yellow('💡 Create a wallet first: make create-wallet'));
+          ipcClient.disconnect();
+          return;
+        }
+        
+        ipcClient.disconnect();
+        
+      } catch (daemonErr) {
+        console.log(chalk.red('❌ Daemon not running or not responding'));
+        console.log(chalk.yellow('💡 Start daemon: make start-daemon'));
+        return;
+      }
+
+      // Get password to unlock keystore
+      const { password } = await inquirer.prompt([
+        {
+          type: 'password',
+          name: 'password',
+          message: 'Enter wallet password to create new account:',
+          mask: '*'
+        }
+      ]);
+
+      // Load and unlock keystore
+      await this.keystore.init();
+      const unlocked = await this.keystore.unlock(password);
+      
+      if (!unlocked) {
+        console.log(chalk.red('❌ Invalid password'));
+        return;
+      }
+
+      // Create new account
+      const spinner = ora('Creating new account...').start();
+      
+      try {
+        const newAccount = await this.keystore.createNextAccount(password);
+        spinner.succeed('Account created successfully!');
+        
+        console.log();
+        console.log(chalk.green('✅ New account created!'));
+        console.log(chalk.blue('📄 Address:'), newAccount.address);
+        console.log(chalk.blue('🏷️  Label:'), newAccount.label);
+        console.log(chalk.blue('🔢 Index:'), newAccount.index);
+        console.log();
+        console.log(chalk.yellow('💡 The daemon will automatically reload the updated keystore'));
+        
+      } catch (err) {
+        spinner.fail('Failed to create account');
+        throw err;
+      }
+
+      // Lock keystore after creation
+      this.keystore.lock();
+
+    } catch (err) {
+      console.log(chalk.red('❌ Account creation failed:'), err.message);
+    }
+  }
+
   async exportAll() {
     console.log(chalk.red('⚠️  WARNING: EXPORTING ALL WALLET DATA'));
     console.log(chalk.red('    This will show your mnemonic phrase and ALL private keys!'));
