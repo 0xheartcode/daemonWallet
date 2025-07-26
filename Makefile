@@ -59,10 +59,26 @@ list-accounts: ## List all wallet accounts
 	@echo "$(YELLOW)Listing accounts...$(NC)"
 	@cd packages/cli && ./bin/wallet-cli list
 
-export-key: ## Export private key for an address (dangerous!)
-	@echo "$(RED)⚠️  WARNING: Exporting private keys is dangerous!$(NC)"
-	@read -p "Enter address to export: " address; \
-	cd packages/cli && ./bin/wallet-cli export $$address
+create-account: ## Create a new account (HD derivation)
+	@echo "$(YELLOW)Creating new account...$(NC)"
+	@cd packages/cli && ./bin/wallet-cli create-account
+
+list-all-accounts: ## List all accounts including hidden ones
+	@echo "$(YELLOW)Listing all accounts (including hidden)...$(NC)"
+	@cd packages/cli && ./bin/wallet-cli list --include-hidden
+
+export-wallet: ## Export all private keys and wallet data (dangerous!)
+	@echo "$(RED)⚠️  WARNING: Exporting all private keys is extremely dangerous!$(NC)"
+	@echo "$(RED)    This will show ALL your private keys and mnemonic phrase!$(NC)"
+	@echo "$(YELLOW)Checking daemon and wallet status first...$(NC)"
+	@cd packages/cli && ./bin/wallet-cli daemon status || (echo "$(RED)❌ Daemon not running. Start with: make start-daemon$(NC)" && exit 1)
+	@echo ""
+	@read -p "Are you absolutely sure you want to export everything? (type 'YES'): " confirm; \
+	if [ "$$confirm" != "YES" ]; then \
+		echo "$(YELLOW)Export cancelled$(NC)"; \
+		exit 0; \
+	fi; \
+	cd packages/cli && ./bin/wallet-cli export-wallet
 
 delete-wallet: ## Delete wallet permanently (dangerous!)
 	@echo "$(RED)⚠️  WARNING: This will permanently delete your wallet!$(NC)"
@@ -108,22 +124,36 @@ test-integration: ## Run integration tests (requires daemon running)
 
 dev: ## Start daemon in development mode (foreground)
 	@echo "$(YELLOW)Starting daemon in development mode...$(NC)"
-	@make start-daemon
+	@cd packages/daemon && ./bin/daemon-wallet-service
 
 logs: ## Show daemon logs (if available)
 	@echo "$(YELLOW)Showing daemon logs...$(NC)"
 	@tail -f ~/.daemon-wallet/daemon.log 2>/dev/null || echo "$(YELLOW)No log file found$(NC)"
 
-reset: ## Reset wallet (delete keystore and config)
-	@echo "$(RED)⚠️  WARNING: This will delete your wallet and settings!$(NC)"
-	@read -p "Are you sure? (y/N): " confirm; \
-	if [ "$$confirm" = "y" ]; then \
-		echo "$(YELLOW)Resetting wallet...$(NC)"; \
-		rm -rf ~/.daemon-wallet; \
-		echo "$(GREEN)✓ Wallet reset complete$(NC)"; \
+ps-daemon: ## Show daemon processes
+	@echo "$(YELLOW)Checking for daemon processes...$(NC)"
+	@ps aux | grep daemon-wallet | grep -v grep || echo "$(YELLOW)No daemon processes found$(NC)"
+
+kill-daemon: ## Force kill daemon processes
+	@echo "$(YELLOW)Killing daemon processes...$(NC)"
+	@pkill -f daemon-wallet-service 2>/dev/null && echo "$(GREEN)✓ Daemon processes killed$(NC)" || echo "$(YELLOW)No daemon processes to kill$(NC)"
+
+wipe-keystores: ## Delete all keystore files (dangerous!)
+	@echo "$(RED)⚠️  WARNING: This will delete ALL wallet keystores!$(NC)"
+	@echo "$(YELLOW)Your private keys will be lost forever unless you have backups!$(NC)"
+	@read -p "Type 'DELETE' to confirm: " confirm; \
+	if [ "$$confirm" = "DELETE" ]; then \
+		echo "$(YELLOW)Wiping keystores...$(NC)"; \
+		rm -rf ~/.daemon-wallet/keystore/*; \
+		echo "$(GREEN)✓ All keystores deleted$(NC)"; \
 	else \
-		echo "$(YELLOW)Reset cancelled$(NC)"; \
+		echo "$(YELLOW)Wipe cancelled$(NC)"; \
 	fi
+
+quick-wipe: ## Quick wipe keystores (development only, no confirmation)
+	@echo "$(YELLOW)Quick wiping keystores...$(NC)"
+	@rm -rf ~/.daemon-wallet/keystore/* 2>/dev/null || true
+	@echo "$(GREEN)✓ Keystores wiped$(NC)"
 
 ##@ ⚙️ Configuration & Setup
 

@@ -54,10 +54,33 @@ export class DaemonIPCServer {
   async handleGetStatus(message, socket) {
     const status = this.sessionManager.getStatus();
     
+    // Count keystore files on disk
+    let keystoreCount = 0;
+    try {
+      if (this.keystore.countKeystoreFiles) {
+        keystoreCount = await this.keystore.countKeystoreFiles();
+      } else {
+        // Fallback for regular keystore
+        const fs = await import('node:fs/promises');
+        const path = await import('node:path');
+        const os = await import('node:os');
+        
+        const keystoreDir = path.default.join(os.default.homedir(), '.daemon-wallet', 'keystore');
+        const files = await fs.default.readdir(keystoreDir);
+        keystoreCount = files.filter(f => f.endsWith('.json')).length;
+      }
+    } catch (err) {
+      // Directory doesn't exist or other error - keystore count remains 0
+    }
+    
     const response = new IPCMessage(IPC_MESSAGE_TYPES.STATUS_RESPONSE, {
       ...status,
-      hasKeystore: !!this.keystore.encryptedData
+      hasKeystore: this.keystore.hasKeystore(),
+      keystoreCount
     });
+    
+    // Use the same ID as the request
+    response.id = message.id;
     
     this.server.sendToClient(socket, response);
   }
@@ -81,6 +104,7 @@ export class DaemonIPCServer {
           accounts
         });
         
+        response.id = message.id;
         this.server.sendToClient(socket, response);
       } else {
         const response = new IPCMessage(IPC_MESSAGE_TYPES.UNLOCK_RESPONSE, {
@@ -88,6 +112,7 @@ export class DaemonIPCServer {
           error: 'Invalid password'
         });
         
+        response.id = message.id;
         this.server.sendToClient(socket, response);
       }
 
@@ -97,6 +122,7 @@ export class DaemonIPCServer {
         error: err.message
       });
       
+      response.id = message.id;
       this.server.sendToClient(socket, response);
     }
   }

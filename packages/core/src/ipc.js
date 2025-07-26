@@ -53,8 +53,12 @@ export class IPCServer extends EventEmitter {
     // Remove existing socket file
     try {
       await fs.unlink(this.socketPath);
+      console.log('🧹 Cleaned up existing socket file');
     } catch (err) {
       // File doesn't exist, that's OK
+      if (err.code !== 'ENOENT') {
+        console.warn('Warning: Could not remove socket file:', err.message);
+      }
     }
 
     this.server = net.createServer();
@@ -82,9 +86,19 @@ export class IPCServer extends EventEmitter {
     });
 
     return new Promise((resolve, reject) => {
+      this.server.on('error', (err) => {
+        console.error('IPC Server error:', err);
+        reject(err);
+      });
+      
       this.server.listen(this.socketPath, (err) => {
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          console.error('Failed to listen on socket:', err);
+          reject(err);
+        } else {
+          console.log('📡 IPC server listening on:', this.socketPath);
+          resolve();
+        }
       });
     });
   }
@@ -132,8 +146,21 @@ export class IPCClient extends EventEmitter {
   async connect() {
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(this.socketPath);
+      
+      let resolved = false;
+
+      const cleanup = () => {
+        if (this.socket) {
+          this.socket.removeAllListeners('connect');
+          this.socket.removeAllListeners('error');
+        }
+      };
 
       this.socket.on('connect', () => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        
         this.connected = true;
         this.emit('connect');
         resolve();
@@ -152,19 +179,59 @@ export class IPCClient extends EventEmitter {
             this.emit('message', message);
           }
         } catch (err) {
-          this.emit('error', err);
+          // Only emit error if we have listeners to prevent unhandled errors
+          if (this.listenerCount('error') > 0) {
+            this.emit('error', err);
+          }
         }
       });
 
       this.socket.on('close', () => {
         this.connected = false;
         this.emit('disconnect');
+        
+        // Reject pending responses
+        for (const [id, { reject: rejectPending }] of this.pendingResponses) {
+          rejectPending(new Error('Connection closed'));
+        }
+        this.pendingResponses.clear();
       });
 
       this.socket.on('error', (err) => {
-        this.connected = false;
-        this.emit('error', err);
-        reject(err);
+        if (resolved) {
+          // Connection was established but later errored
+          this.connected = false;
+          // Only emit error if we have listeners
+          if (this.listenerCount('error') > 0) {
+            this.emit('error', err);
+          }
+          
+          // Reject pending responses
+          for (const [id, { reject: rejectPending }] of this.pendingResponses) {
+            rejectPending(err);
+          }
+          this.pendingResponses.clear();
+        } else {
+          // Connection failed
+          resolved = true;
+          cleanup();
+          this.connected = false;
+          reject(err);
+        }
+      });
+
+      // Add connection timeout
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          this.socket.destroy();
+          reject(new Error('Connection timeout'));
+        }
+      }, 5000);
+
+      this.socket.on('connect', () => {
+        clearTimeout(timeout);
       });
     });
   }

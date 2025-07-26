@@ -26,21 +26,21 @@ export class Keystore {
       throw new Error('Password must be at least 8 characters');
     }
 
-    // Generate mnemonic and create HD wallet
-    const wallet = ethers.Wallet.createRandom();
-    const mnemonic = wallet.mnemonic.phrase;
-    
-    // Derive first account
-    const hdNode = ethers.HDNodeWallet.fromPhrase(mnemonic);
-    const account = hdNode.derivePath("m/44'/60'/0'/0/0");
+    // Generate a random wallet - this already gives us the first account
+    const account = ethers.Wallet.createRandom();
+    const mnemonic = account.mnemonic;
     
     // Store wallet data
     const walletData = {
-      mnemonic,
+      mnemonic: mnemonic.phrase,
+      nextAccountIndex: 1, // Next account to generate
       accounts: [{
         address: account.address,
-        path: "m/44'/60'/0'/0/0",
-        privateKey: account.privateKey
+        path: account.path || "m/44'/60'/0'/0/0",
+        privateKey: account.privateKey,
+        index: 0,
+        visible: true,
+        label: 'Account 1'
       }]
     };
 
@@ -53,7 +53,7 @@ export class Keystore {
     
     return {
       address: account.address,
-      mnemonic // Return mnemonic only on creation
+      mnemonic: mnemonic.phrase // Return mnemonic only on creation
     };
   }
 
@@ -109,6 +109,9 @@ export class Keystore {
       const decrypted = await CryptoUtils.decrypt(this.encryptedData.crypto, password);
       const walletData = JSON.parse(decrypted);
       
+      // Store wallet data for account management
+      this.walletData = walletData;
+      
       // Restore wallets
       this.wallets.clear();
       
@@ -135,14 +138,38 @@ export class Keystore {
       }
     }
     this.wallets.clear();
+    this.walletData = null; // Clear wallet data
     this.isLocked = true;
   }
 
-  getAccounts() {
+  getAccounts(includeHidden = false) {
     if (this.isLocked) {
+      // When locked, try to get addresses from encrypted data if available
+      if (this.encryptedData) {
+        // We can't decrypt without password, but we could store addresses separately
+        // For now, return empty but indicate keystore exists
+        return [];
+      }
       return [];
     }
-    return Array.from(this.wallets.keys());
+    
+    // Return only visible accounts unless includeHidden is true
+    const accounts = Array.from(this.wallets.keys());
+    if (includeHidden || !this.walletData) {
+      return accounts;
+    }
+    
+    // Filter by visibility
+    return accounts.filter(address => {
+      const accountData = this.walletData.accounts.find(
+        acc => acc.address.toLowerCase() === address.toLowerCase()
+      );
+      return accountData?.visible !== false;
+    });
+  }
+
+  hasKeystore() {
+    return !!this.encryptedData;
   }
 
   async signTransaction(tx, address) {
@@ -215,6 +242,137 @@ export class Keystore {
     );
     
     this.encryptedData = keystoreData;
+  }
+
+  async createNextAccount(password) {
+    if (this.isLocked) {
+      throw new Error('Keystore is locked');
+    }
+    
+    if (!this.walletData?.mnemonic) {
+      throw new Error('No mnemonic found - wallet may have been imported from private key');
+    }
+
+    const nextIndex = this.walletData.nextAccountIndex || 1;
+    const derivationPath = `m/44'/60'/0'/0/${nextIndex}`;
+    
+    // Derive new account
+    const hdNode = ethers.HDNodeWallet.fromPhrase(this.walletData.mnemonic);
+    const newAccount = hdNode.derivePath(derivationPath);
+    
+    // Add to wallet data
+    const accountData = {
+      address: newAccount.address,
+      path: derivationPath,
+      privateKey: newAccount.privateKey,
+      index: nextIndex,
+      visible: true,
+      label: `Account ${nextIndex + 1}`
+    };
+    
+    this.walletData.accounts.push(accountData);
+    this.walletData.nextAccountIndex = nextIndex + 1;
+    
+    // Save updated wallet data
+    await this._saveWalletData(this.walletData, password);
+    
+    // Add to memory
+    this.wallets.set(newAccount.address.toLowerCase(), newAccount);
+    
+    return {
+      address: newAccount.address,
+      index: nextIndex,
+      label: accountData.label
+    };
+  }
+
+  async hideAccount(address, password) {
+    return await this._setAccountVisibility(address, false, password);
+  }
+
+  async showAccount(address, password) {
+    return await this._setAccountVisibility(address, true, password);
+  }
+
+  async setAccountLabel(address, label, password) {
+    if (this.isLocked) {
+      throw new Error('Keystore is locked');
+    }
+
+    const accountData = this.walletData.accounts.find(
+      acc => acc.address.toLowerCase() === address.toLowerCase()
+    );
+    
+    if (!accountData) {
+      throw new Error('Account not found');
+    }
+
+    accountData.label = label;
+    await this._saveWalletData(this.walletData, password);
+    
+    return true;
+  }
+
+  async _setAccountVisibility(address, visible, password) {
+    if (this.isLocked) {
+      throw new Error('Keystore is locked');
+    }
+
+    const accountData = this.walletData.accounts.find(
+      acc => acc.address.toLowerCase() === address.toLowerCase()
+    );
+    
+    if (!accountData) {
+      throw new Error('Account not found');
+    }
+
+    // Cannot hide the first account (index 0)
+    if (accountData.index === 0 && !visible) {
+      throw new Error('Cannot hide the primary account');
+    }
+
+    accountData.visible = visible;
+    await this._saveWalletData(this.walletData, password);
+    
+    return true;
+  }
+
+  getAccountDetails(address) {
+    if (this.isLocked) {
+      throw new Error('Keystore is locked');
+    }
+
+    const accountData = this.walletData?.accounts.find(
+      acc => acc.address.toLowerCase() === address.toLowerCase()
+    );
+    
+    return accountData ? {
+      address: accountData.address,
+      path: accountData.path,
+      index: accountData.index,
+      visible: accountData.visible,
+      label: accountData.label
+    } : null;
+  }
+
+  getAllAccountDetails(includeHidden = false) {
+    if (this.isLocked) {
+      throw new Error('Keystore is locked');
+    }
+
+    if (!this.walletData?.accounts) {
+      return [];
+    }
+
+    return this.walletData.accounts
+      .filter(acc => includeHidden || acc.visible !== false)
+      .map(acc => ({
+        address: acc.address,
+        path: acc.path,
+        index: acc.index,
+        visible: acc.visible,
+        label: acc.label
+      }));
   }
 
   async deleteKeystore() {

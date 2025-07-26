@@ -8,14 +8,17 @@ export class NativeMessaging extends EventEmitter {
   }
 
   setupStdinReader() {
-    process.stdin.on('readable', () => {
-      this.readMessages();
-    });
+    // Only set up stdin reading in native messaging mode
+    if (!process.stdin.isTTY) {
+      process.stdin.on('readable', () => {
+        this.readMessages();
+      });
 
-    process.stdin.on('end', () => {
-      this.connected = false;
-      this.emit('disconnect');
-    });
+      process.stdin.on('end', () => {
+        this.connected = false;
+        this.emit('disconnect');
+      });
+    }
   }
 
   readMessages() {

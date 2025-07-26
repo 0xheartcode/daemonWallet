@@ -4,6 +4,7 @@ import ora from 'ora';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,11 +13,54 @@ export class DaemonCommands {
     this.ipcClient = ipcClient;
   }
 
+  async checkDaemonAndWallet(requireUnlocked = false) {
+    // Add error handler to prevent unhandled errors
+    this.ipcClient.on('error', () => {
+      // Silently handle to prevent unhandled error events
+    });
+
+    try {
+      await this.ipcClient.connect();
+      const status = await this.ipcClient.requestStatus();
+      
+      // Check if keystore exists
+      if (!status.hasKeystore && status.keystoreCount === 0) {
+        return {
+          success: false,
+          error: 'no_keystore',
+          message: 'No wallet found. Create one first: wallet-cli create'
+        };
+      }
+
+      // Check if unlock is required
+      if (requireUnlocked && status.locked) {
+        return {
+          success: false,
+          error: 'locked',
+          message: 'Wallet is locked. Unlock first: wallet-cli daemon unlock'
+        };
+      }
+
+      return { success: true, status };
+    } catch (err) {
+      return {
+        success: false,
+        error: 'daemon_not_running',
+        message: 'Daemon is not running. Start it: wallet-cli daemon start'
+      };
+    }
+  }
+
   async status() {
     try {
       console.log(chalk.blue('📊 Checking daemon status...'));
       
       const spinner = ora('Connecting to daemon...').start();
+      
+      // Add error handler to prevent unhandled errors
+      this.ipcClient.on('error', () => {
+        // Silently handle to prevent unhandled error events
+      });
       
       try {
         await this.ipcClient.connect();
@@ -29,12 +73,14 @@ export class DaemonCommands {
         console.log(chalk.blue('🔐 Locked:'), status.locked ? chalk.red('Yes') : chalk.green('No'));
         console.log(chalk.blue('👥 Accounts:'), status.accounts?.length || 0);
         console.log(chalk.blue('🔗 Active sessions:'), status.activeSessions || 0);
+        console.log(chalk.blue('🗄️  Keystores on disk:'), status.keystoreCount || 0);
         
         this.ipcClient.disconnect();
         
       } catch (err) {
         spinner.fail('Daemon not running');
         console.log();
+        console.log(chalk.red('❌ Daemon is not running'));
         console.log(chalk.yellow('💡 Start the daemon with: wallet-cli daemon start'));
       }
       
@@ -48,6 +94,11 @@ export class DaemonCommands {
       console.log(chalk.blue('🔓 Unlocking wallet...'));
       
       const spinner = ora('Connecting to daemon...').start();
+      
+      // Add error handler to prevent unhandled errors
+      this.ipcClient.on('error', () => {
+        // Silently handle to prevent unhandled error events
+      });
       
       try {
         await this.ipcClient.connect();
@@ -73,7 +124,12 @@ export class DaemonCommands {
             console.log(chalk.green('✅ Wallet unlocked successfully!'));
             console.log(chalk.blue('👥 Accounts available:'), result.accounts?.length || 0);
           } else {
-            unlockSpinner.fail('Invalid password');
+            unlockSpinner.fail('Unlock failed');
+            console.log();
+            console.log(chalk.red('❌ Error:'), result.error || 'Unknown error');
+            if (result.error?.includes('No keystore found')) {
+              console.log(chalk.blue('💡 Create a wallet first: wallet-cli create'));
+            }
           }
           
         } catch (err) {
@@ -84,8 +140,9 @@ export class DaemonCommands {
         this.ipcClient.disconnect();
         
       } catch (err) {
-        spinner.fail('Cannot connect to daemon');
+        spinner.fail('Daemon not running');
         console.log();
+        console.log(chalk.red('❌ Daemon is not running'));
         console.log(chalk.yellow('💡 Start the daemon with: wallet-cli daemon start'));
       }
       
@@ -100,6 +157,11 @@ export class DaemonCommands {
       
       const spinner = ora('Connecting to daemon...').start();
       
+      // Add error handler to prevent unhandled errors
+      this.ipcClient.on('error', () => {
+        // Silently handle to prevent unhandled error events
+      });
+      
       try {
         await this.ipcClient.connect();
         spinner.succeed('Connected to daemon');
@@ -112,8 +174,9 @@ export class DaemonCommands {
         this.ipcClient.disconnect();
         
       } catch (err) {
-        spinner.fail('Cannot connect to daemon');
+        spinner.fail('Daemon not running');
         console.log();
+        console.log(chalk.red('❌ Daemon is not running'));
         console.log(chalk.yellow('💡 Start the daemon with: wallet-cli daemon start'));
       }
       
@@ -142,12 +205,22 @@ export class DaemonCommands {
       console.log(chalk.blue('📂 Daemon path:'), daemonPath);
       console.log(chalk.blue('🔄 Starting daemon process...'));
       
-      const daemon = spawn('node', [daemonPath], {
+      const logFile = path.join(process.env.HOME, '.daemon-wallet', 'daemon.log');
+      const scriptPath = path.resolve(__dirname, '../../../scripts/start-daemon-bg.sh');
+      
+      // Ensure log directory exists
+      await fs.mkdir(path.dirname(logFile), { recursive: true });
+      
+      // Use background script for proper detachment
+      const daemon = spawn('bash', [scriptPath, daemonPath, logFile], {
         detached: true,
         stdio: 'ignore'
       });
-
+      
       daemon.unref();
+      
+      // Wait a moment for daemon to initialize
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       console.log();
       console.log(chalk.green('✅ Daemon started successfully!'));
@@ -166,6 +239,11 @@ export class DaemonCommands {
       console.log(chalk.blue('🛑 Stopping daemon...'));
       
       const spinner = ora('Connecting to daemon...').start();
+      
+      // Add error handler to prevent unhandled errors
+      this.ipcClient.on('error', () => {
+        // Silently handle to prevent unhandled error events
+      });
       
       try {
         await this.ipcClient.connect();

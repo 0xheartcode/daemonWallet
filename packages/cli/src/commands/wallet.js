@@ -13,6 +13,16 @@ export class WalletCommands {
     console.log();
 
     try {
+      // Check if keystore already exists
+      await this.keystore.init();
+      if (this.keystore.hasKeystore()) {
+        console.log(chalk.red('❌ A wallet already exists!'));
+        console.log(chalk.yellow('💡 Only one wallet is allowed at a time'));
+        console.log(chalk.blue('   To replace it: make delete-wallet && make create-wallet'));
+        console.log(chalk.blue('   To import different: make delete-wallet && make import-wallet'));
+        return;
+      }
+
       // Get password
       const { password, confirmPassword } = await inquirer.prompt([
         {
@@ -82,6 +92,15 @@ export class WalletCommands {
     console.log();
 
     try {
+      // Check if keystore already exists
+      await this.keystore.init();
+      if (this.keystore.hasKeystore()) {
+        console.log(chalk.red('❌ A wallet already exists!'));
+        console.log(chalk.yellow('💡 Only one wallet is allowed at a time'));
+        console.log(chalk.blue('   To replace it: make delete-wallet && make import-wallet'));
+        return;
+      }
+
       const { secretType } = await inquirer.prompt([
         {
           type: 'list',
@@ -170,11 +189,65 @@ export class WalletCommands {
 
   async list() {
     try {
+      // Try to get status from daemon first
+      try {
+        const { IPCClient } = await import('@daemon-wallet/core');
+        const ipcClient = new IPCClient(this.config.getDaemonSocket());
+        
+        // Add error handler to prevent unhandled errors
+        ipcClient.on('error', () => {
+          // Silently handle to prevent unhandled error events
+        });
+        
+        await ipcClient.connect();
+        const status = await ipcClient.requestStatus();
+        ipcClient.disconnect();
+        
+        if (status.accounts && status.accounts.length > 0) {
+          console.log(chalk.blue('📋 Wallet Accounts:'));
+          console.log();
+          
+          status.accounts.forEach((address, index) => {
+            console.log(chalk.green(`${index + 1}.`), chalk.bold(address));
+          });
+
+          console.log();
+          console.log(chalk.gray(`Total: ${status.accounts.length} account(s)`));
+          
+          if (status.locked) {
+            console.log(chalk.yellow('🔒 Wallet is locked'));
+            console.log(chalk.blue('💡 Unlock with: wallet-cli daemon unlock'));
+          } else {
+            console.log(chalk.green('🔓 Wallet is unlocked'));
+          }
+          return;
+        }
+        
+        // If daemon shows no accounts but has keystore, it's locked
+        if (status.hasKeystore) {
+          console.log(chalk.yellow('🔒 Wallet is locked'));
+          console.log(chalk.blue('💡 Unlock with: wallet-cli daemon unlock'));
+          console.log(chalk.gray('Or check keystore files at: ~/.daemon-wallet/keystore/'));
+          return;
+        }
+        
+      } catch (daemonErr) {
+        // Daemon not running, fall back to direct keystore access
+        console.log(chalk.yellow('⚠️  Daemon not running, checking keystore directly...'));
+      }
+      
+      // Fallback: Direct keystore access
       const accounts = this.keystore.getAccounts();
       
       if (accounts.length === 0) {
-        console.log(chalk.yellow('📭 No accounts found'));
-        console.log(chalk.blue('💡 Create a wallet with: wallet-cli create'));
+        if (this.keystore.hasKeystore()) {
+          console.log(chalk.yellow('🔒 Wallet is locked'));
+          console.log(chalk.blue('💡 Start daemon and unlock: wallet-cli daemon start'));
+          console.log(chalk.gray('Or check keystore files at: ~/.daemon-wallet/keystore/'));
+        } else {
+          console.log(chalk.yellow('📭 No accounts found'));
+          console.log(chalk.blue('💡 Create a wallet with: wallet-cli create'));
+        }
         return;
       }
 
@@ -200,49 +273,107 @@ export class WalletCommands {
     }
   }
 
-  async export(address) {
-    console.log(chalk.red('⚠️  WARNING: EXPORTING PRIVATE KEY'));
+  async exportAll() {
+    console.log(chalk.red('⚠️  WARNING: EXPORTING ALL WALLET DATA'));
+    console.log(chalk.red('    This will show your mnemonic phrase and ALL private keys!'));
     console.log(chalk.red('    This is extremely dangerous!'));
-    console.log(chalk.red('    Only do this if you know what you\'re doing.'));
     console.log();
 
     try {
-      const { confirmed } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmed',
-          message: 'Are you sure you want to export the private key?',
-          default: false
+      // Check if daemon is running and get status through daemon
+      try {
+        const { IPCClient } = await import('@daemon-wallet/core');
+        const ipcClient = new IPCClient(this.config.getDaemonSocket());
+        
+        // Add error handler to prevent unhandled errors
+        ipcClient.on('error', () => {
+          // Silently handle to prevent unhandled error events
+        });
+        
+        await ipcClient.connect();
+        const status = await ipcClient.requestStatus();
+        
+        if (status.locked) {
+          console.log(chalk.red('❌ Wallet is locked'));
+          console.log(chalk.yellow('💡 Unlock first: make unlock-wallet'));
+          ipcClient.disconnect();
+          return;
         }
-      ]);
-
-      if (!confirmed) {
-        console.log(chalk.blue('👍 Export cancelled'));
+        
+        if (!status.hasKeystore) {
+          console.log(chalk.red('❌ No wallet found'));
+          console.log(chalk.yellow('💡 Create a wallet first: make create-wallet'));
+          ipcClient.disconnect();
+          return;
+        }
+        
+        ipcClient.disconnect();
+        
+      } catch (daemonErr) {
+        console.log(chalk.red('❌ Daemon not running or not responding'));
+        console.log(chalk.yellow('💡 Start daemon: make start-daemon'));
         return;
       }
 
-      if (this.keystore.isLocked) {
-        const { password } = await inquirer.prompt([
-          {
-            type: 'password',
-            name: 'password',
-            message: 'Enter wallet password:',
-            mask: '*'
-          }
-        ]);
-
-        const unlocked = await this.keystore.unlock(password);
-        if (!unlocked) {
-          console.log(chalk.red('❌ Invalid password'));
-          return;
+      // Get password to decrypt keystore directly
+      const { password } = await inquirer.prompt([
+        {
+          type: 'password',
+          name: 'password',
+          message: 'Enter wallet password to export all data:',
+          mask: '*'
         }
+      ]);
+
+      // Load and decrypt keystore directly
+      await this.keystore.init();
+      const unlocked = await this.keystore.unlock(password);
+      
+      if (!unlocked) {
+        console.log(chalk.red('❌ Invalid password'));
+        return;
       }
 
-      // TODO: Implement export functionality
-      console.log(chalk.yellow('🚧 Export functionality coming soon...'));
+      console.log();
+      console.log(chalk.yellow('📊 WALLET EXPORT DATA'));
+      console.log(chalk.yellow('=' .repeat(50)));
+      
+      // Export mnemonic if available
+      if (this.keystore.walletData?.mnemonic) {
+        console.log();
+        console.log(chalk.cyan('🔑 MNEMONIC PHRASE:'));
+        console.log(chalk.bold(this.keystore.walletData.mnemonic));
+      }
+      
+      // Export all accounts
+      const accountDetails = this.keystore.getAllAccountDetails(true); // Include hidden
+      
+      console.log();
+      console.log(chalk.cyan(`👥 ACCOUNTS (${accountDetails.length} total):`));
+      
+      for (const account of accountDetails) {
+        console.log();
+        console.log(chalk.blue(`Account ${account.index + 1}:`), chalk.bold(account.label));
+        console.log(chalk.gray('  Address:     '), account.address);
+        console.log(chalk.gray('  Path:        '), account.path);
+        console.log(chalk.gray('  Visible:     '), account.visible ? chalk.green('Yes') : chalk.red('No'));
+        
+        // Get private key
+        const wallet = this.keystore.wallets.get(account.address.toLowerCase());
+        if (wallet) {
+          console.log(chalk.gray('  Private Key: '), chalk.red(wallet.privateKey));
+        }
+      }
+      
+      console.log();
+      console.log(chalk.yellow('=' .repeat(50)));
+      console.log(chalk.red('⚠️  Keep this information secure and never share it!'));
+      
+      // Lock keystore after export
+      this.keystore.lock();
 
     } catch (err) {
-      console.log(chalk.red('❌ Error:'), err.message);
+      console.log(chalk.red('❌ Export failed:'), err.message);
     }
   }
 

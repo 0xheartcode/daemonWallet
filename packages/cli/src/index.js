@@ -49,11 +49,10 @@ program
   });
 
 program
-  .command('export')
-  .description('Export private key (dangerous!)')
-  .argument('<address>', 'Account address to export')
-  .action(async (address) => {
-    await walletCommands.export(address);
+  .command('export-wallet')
+  .description('Export all wallet data including mnemonic and private keys (extremely dangerous!)')
+  .action(async () => {
+    await walletCommands.exportAll();
   });
 
 program

@@ -6,7 +6,7 @@ const SALT_LENGTH = 32;
 const IV_LENGTH = 16;
 const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
-const SCRYPT_N = 262144; // 2^18
+const SCRYPT_N = 16384; // 2^14 (reduced from 2^18 for lower memory usage)
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 
