@@ -1,0 +1,23 @@
+{
+  "name": "@daemon-wallet/daemon",
+  "version": "0.1.0",
+  "description": "Daemon service for native messaging with Chrome",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "daemon-wallet-service": "./bin/daemon-wallet-service"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test src/*.test.js"
+  },
+  "dependencies": {
+    "@daemon-wallet/core": "file:../core",
+    "chalk": "^5.3.0",
+    "inquirer": "^9.2.12",
+    "ethers": "^6.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
