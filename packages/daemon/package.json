@@ -1,11 +1,11 @@
 {
-  "name": "@daemon-wallet/cli",
+  "name": "@daemon-wallet/daemon",
   "version": "0.1.0",
-  "description": "CLI management tool for daemon wallet",
+  "description": "Daemon service for native messaging with Chrome",
   "main": "src/index.js",
   "type": "module",
   "bin": {
-    "wallet-cli": "./bin/wallet-cli"
+    "daemon-wallet-service": "./bin/daemon-wallet-service"
   },
   "scripts": {
     "start": "node src/index.js",
@@ -13,10 +13,9 @@
   },
   "dependencies": {
     "@daemon-wallet/core": "file:../core",
-    "commander": "^11.1.0",
-    "inquirer": "^9.2.12",
     "chalk": "^5.3.0",
-    "ora": "^7.0.1"
+    "inquirer": "^9.2.12",
+    "ethers": "^6.9.0"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,0 +1,19 @@
+{
+  "name": "@daemon-wallet/core",
+  "version": "0.1.0",
+  "description": "Core libraries for daemon wallet",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test src/*.test.js"
+  },
+  "dependencies": {
+    "ethers": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
